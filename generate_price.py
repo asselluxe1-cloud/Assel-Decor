@@ -6,16 +6,46 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree, register_nam
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# ============================================================
+# CONFIG
+# ============================================================
+
 with open(BASE_DIR / "config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
-pre_order_days = int(config.get("pre_order_days", 2))
-merchant_id = str(config.get("merchantid", ""))
-default_store_id = str(config.get("store_id", ""))
+PRE_ORDER_DAYS = 2
+MERCHANT_ID = str(config.get("merchantid", ""))
+DEFAULT_STORE_ID = str(config.get("store_id", ""))
+
+# ============================================================
+# PRICE RULES — ASSEL DECOR
+# ============================================================
+
+NORMAL_PRICES = {
+    "160x80": 49990,
+    "100x70": 29990,
+    "50x70": 14990,
+}
+
+LIGHT_CLOCK_PRICES = {
+    "160x80": 65000,
+    "100x70": 45000,
+    "50x70": 20000,
+}
+
+# ============================================================
+# PRODUCTS
+# ============================================================
 
 products = {}
 
-with open(BASE_DIR / "products.csv", "r", encoding="utf-8-sig", newline="") as f:
+with open(
+    BASE_DIR / "products.csv",
+    "r",
+    encoding="utf-8-sig",
+    newline=""
+) as f:
+
     reader = csv.DictReader(f)
 
     required = {
@@ -29,6 +59,7 @@ with open(BASE_DIR / "products.csv", "r", encoding="utf-8-sig", newline="") as f
     }
 
     missing = required - set(reader.fieldnames or [])
+
     if missing:
         raise ValueError(
             "products.csv ішінде бағандар жетіспейді: "
@@ -37,7 +68,7 @@ with open(BASE_DIR / "products.csv", "r", encoding="utf-8-sig", newline="") as f
 
     for row in reader:
 
-        # ТЕК ASSEL DECOR ТАУАРЛАРЫ
+        # ТЕК ASSEL DECOR
         if row["brand"].strip().lower() != "assel-decor":
             continue
 
@@ -48,17 +79,26 @@ with open(BASE_DIR / "products.csv", "r", encoding="utf-8-sig", newline="") as f
 
         size = row["size"].strip().lower().replace(" ", "")
         model = row["model"].strip()
-        store_id = row["store_id"].strip() or default_store_id
 
-        stock_count = int(float(row["stock_count"] or 0))
-
-        current_price = (
-            int(float(row["current_price"]))
-            if row["current_price"].strip()
-            else 0
+        store_id = (
+            row["store_id"].strip()
+            or DEFAULT_STORE_ID
         )
 
+        try:
+            stock_count = int(float(row["stock_count"] or 0))
+        except ValueError:
+            stock_count = 0
+
+        try:
+            current_price = int(
+                float(row["current_price"])
+            ) if row["current_price"].strip() else 0
+        except ValueError:
+            current_price = 0
+
         if sku not in products:
+
             products[sku] = {
                 "model": model,
                 "brand": row["brand"].strip(),
@@ -73,109 +113,133 @@ with open(BASE_DIR / "products.csv", "r", encoding="utf-8-sig", newline="") as f
         })
 
 
+# ============================================================
+# SIZE NORMALIZATION
+# ============================================================
+
 def normalize_size(size):
-    size = size.lower().replace(" ", "")
+
+    size = (
+        size
+        .lower()
+        .replace(" ", "")
+        .replace("см", "")
+    )
 
     return {
         "80x160": "160x80",
+        "160x80": "160x80",
+
         "70x100": "100x70",
+        "100x70": "100x70",
+
         "70x50": "50x70",
+        "50x70": "50x70",
     }.get(size, size)
 
 
+# ============================================================
+# DETECT LIGHT + CLOCK
+# ============================================================
+
+def has_light_and_clock(model):
+
+    model = model.lower()
+
+    light_words = [
+        "подсвет",
+        "подсветкой",
+        "подсветка",
+        "жарық",
+        "жарығымен",
+        "свет"
+    ]
+
+    clock_words = [
+        "час",
+        "часы",
+        "сағат",
+        "сағатпен",
+        "сағаты"
+    ]
+
+    has_light = any(
+        word in model
+        for word in light_words
+    )
+
+    has_clock = any(
+        word in model
+        for word in clock_words
+    )
+
+    return has_light and has_clock
+
+
+# ============================================================
+# PRICE CALCULATION
+# ============================================================
+
 def calculate_price(product):
 
-    model = product["model"].lower()
+    model = product["model"]
     size = normalize_size(product["size"])
-    current_price = product["current_price"]
 
-    # ПОДСВЕТКАМЕН
-    if "подсвет" in model:
+    # Подсветка + сағат
+    if has_light_and_clock(model):
 
-        prices = {
-            "160x80": 74990,
-            "100x70": 44990,
-            "50x70": 19990
-        }
+        if size in LIGHT_CLOCK_PRICES:
+            return LIGHT_CLOCK_PRICES[size]
 
-        if size in prices:
-            return prices[size]
+    # Кәдімгі картина
+    if size in NORMAL_PRICES:
+        return NORMAL_PRICES[size]
 
-    # САҒАТПЕН
-    if "час" in model or "часы" in model or "сағат" in model:
-
-        prices = {
-            "160x80": 59990,
-            "100x70": 39990
-        }
-
-        if size in prices:
-            return prices[size]
-
-    # МОДУЛЬ КАРТИНАЛАР
-    # 50x70 = 74 990
-    # 100x70 = 119 990
-    # 80x80 және басқа модульдер бұрынғы бағасында қалады
-    if "модуль" in model:
-
-        prices = {
-            "50x70": 74990,
-            "100x70": 119990
-        }
-
-        return prices.get(size, current_price)
-
-    # ҚАРАПАЙЫМ КАРТИНАЛАР
-    prices = {
-        "160x80": 49990,
-        "100x70": 39990,
-        "50x70": 14000
-    }
-
-    # Басқа стандартты емес өлшемдер өзгермейді
-    return prices.get(size, current_price)
+    # Басқа өлшемдер бұрынғы бағасын сақтайды
+    return product["current_price"]
 
 
 # ============================================================
-# ASSEL DECOR СИПАТТАМАСЫ
+# DESCRIPTION
 # ============================================================
 
-description = """✨ Assel Decor — премиум кристалды картиналар | Премиальные кристальные картины | Premium Crystal Art
+description = """✨ Assel Decor — премиум кристалды картиналар
 
-💎 5 қабатты заманауи технология | 5-слойная технология | 5-Layer Technology
+💎 5 қабатты заманауи технология
 
-🔹 Кристалл тастар | Кристальные камни | Crystal Stones — жарқыраған, сәнді көрініс / роскошный блеск / luxurious shine.
+🔹 Кристалл тастар — жарқыраған және сәнді көрініс.
 
-🔹 Эпоксидті шайыр | Эпоксидная смола | Epoxy Resin — көлем, тереңдік және жылтыр эффект / объём, глубина и глянец / depth, volume and glossy finish.
+🔹 Эпоксидті шайыр — көлем, тереңдік және жылтыр эффект.
 
-🔹 UV PRINT — қанық түстер және анық сурет / яркие цвета и чёткое изображение / vivid colors and sharp image.
+🔹 UV PRINT — қанық түстер және анық сурет.
 
-🔹 МДФ негіз | Основа из МДФ | MDF Base — берік және сапалы / прочная и надёжная / durable and reliable.
+🔹 МДФ негіз — берік және сапалы.
 
-🔹 Алтын түсті алюминий жақтау | Золотая алюминиевая рама | Gold Aluminum Frame — дайын премиум көрініс / завершённый премиальный вид / premium finished look.
+🔹 Алтын түсті алюминий жақтау — дайын премиум көрініс.
 
-🇰🇿 Қазақстанда жасалады | Произведено в Казахстане | Made in Kazakhstan
+🇰🇿 Қазақстанда жасалады
 
-✨ 90% қол еңбегі | 90% ручная работа | 90% Handmade
+✨ 90% қол еңбегі
 
-🎨 Жеке тапсырыс | Индивидуальный заказ | Custom Order
+🎨 Жеке тапсырыс қабылданады
 
-⏳ Дайындау мерзімі — 2 күн | Срок изготовления — 2 дня | Production time — 2 days
+⏳ Дайындау мерзімі — 2 күн
 
-💫 Assel Decor — жай ғана картина емес, үйге сән, жарық және ерекше атмосфера сыйлайтын интерьердің премиум бөлігі.
-
-Assel Decor — не просто картина, а стильный премиальный элемент интерьера, создающий красоту и особую атмосферу.
-
-Assel Decor — more than a painting, it is a premium interior element that brings beauty, elegance and a special atmosphere to your home."""
+💫 Assel Decor — жай ғана картина емес, үйге сән, жарық және ерекше атмосфера сыйлайтын интерьердің премиум бөлігі."""
 
 
 # ============================================================
 # KASPI XML
 # ============================================================
 
-register_namespace("", "kaspiShopping")
+register_namespace(
+    "",
+    "kaspiShopping"
+)
 
-date_string = datetime.now(timezone.utc).strftime(
+date_string = datetime.now(
+    timezone.utc
+).strftime(
     "%Y-%m-%dT%H:%M:%SZ"
 )
 
@@ -190,12 +254,15 @@ root = Element(
     }
 )
 
-SubElement(root, "company").text = "Assel Decor"
+SubElement(
+    root,
+    "company"
+).text = "Assel Decor"
 
 SubElement(
     root,
     "merchantid"
-).text = merchant_id
+).text = MERCHANT_ID
 
 offers = SubElement(
     root,
@@ -203,12 +270,18 @@ offers = SubElement(
 )
 
 
+# ============================================================
+# GENERATE OFFERS
+# ============================================================
+
 for sku, product in products.items():
 
     offer = SubElement(
         offers,
         "offer",
-        {"sku": sku}
+        {
+            "sku": sku
+        }
     )
 
     SubElement(
@@ -221,11 +294,14 @@ for sku, product in products.items():
         "brand"
     ).text = product["brand"]
 
-    # БАРЛЫҚ ASSEL DECOR ТАУАРЫНА БІРДЕЙ СИПАТТАМА
     SubElement(
         offer,
         "description"
     ).text = description
+
+    # ========================================================
+    # AVAILABILITY
+    # ========================================================
 
     availabilities = SubElement(
         offer,
@@ -240,19 +316,30 @@ for sku, product in products.items():
             {
                 "available": "yes",
                 "storeId": availability["store_id"],
-                "preOrder": str(pre_order_days),
+
+                # PREORDER = 2 КҮН
+                "preOrder": str(PRE_ORDER_DAYS),
+
                 "stockCount":
                     str(availability["stock_count"])
             }
         )
 
+    # ========================================================
+    # PRICE
+    # ========================================================
+
+    price = calculate_price(product)
+
     SubElement(
         offer,
         "price"
-    ).text = str(
-        calculate_price(product)
-    )
+    ).text = str(price)
 
+
+# ============================================================
+# SAVE XML
+# ============================================================
 
 output = BASE_DIR / "kaspi.xml"
 
@@ -263,19 +350,30 @@ ElementTree(root).write(
 )
 
 
-print("Kaspi XML дайын.")
+# ============================================================
+# LOG
+# ============================================================
+
+print("=" * 60)
+print("ASSEL DECOR — KASPI XML")
+print("=" * 60)
+
 print(
-    f"Assel Decor тауар саны: {len(products)}"
+    f"Тауар саны: {len(products)}"
 )
+
 print(
-    f"PreOrder: {pre_order_days} күн"
+    f"PreOrder: {PRE_ORDER_DAYS} күн"
 )
-print(
-    f"Merchant ID: {merchant_id}"
-)
-print(
-    f"Store ID: {default_store_id}"
-)
-print(
-    f"XML: {output}"
-)
+
+print()
+print("БАҒАЛАР:")
+print("160x80 кәдімгі          = 49 990 ₸")
+print("160x80 подсветка+сағат  = 65 000 ₸")
+print("100x70 кәдімгі          = 29 990 ₸")
+print("100x70 подсветка+сағат  = 45 000 ₸")
+print("50x70 кәдімгі           = 14 990 ₸")
+print("50x70 подсветка+сағат   = 20 000 ₸")
+print()
+print(f"XML дайын: {output}")
+print("=" * 60)
